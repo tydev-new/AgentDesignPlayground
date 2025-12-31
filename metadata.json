@@ -1,0 +1,5 @@
+{
+  "name": "Agent Design Playground",
+  "description": "A browser-based playground to write and execute agentic applications.",
+  "requestFramePermissions": []
+}
