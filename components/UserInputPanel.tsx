@@ -67,7 +67,7 @@ export const UserInputPanel: React.FC<UserInputPanelProps> = ({
         className="h-8 bg-slate-900 border-t border-slate-800 flex items-center justify-between px-4 cursor-pointer hover:bg-slate-800 transition-colors"
         onClick={onToggle}
       >
-        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+        <span className="text-[10px] font-semibold text-slate-500 tracking-wider flex items-center gap-2">
           {request ? (
             <span className="text-indigo-400 animate-pulse">● Waiting for Input</span>
           ) : (
@@ -90,7 +90,7 @@ export const UserInputPanel: React.FC<UserInputPanelProps> = ({
         onClick={onToggle}
       >
         <div className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">User Input</span>
+            <span className="text-[10px] font-semibold text-slate-400 tracking-wider">User Input</span>
             {request && <span className="text-[10px] text-indigo-400 font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">Active Request</span>}
         </div>
         <button className="text-slate-500 hover:text-white">

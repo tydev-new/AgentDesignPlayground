@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StorageSettings } from '../types';
 
 interface SettingsModalProps {
@@ -11,6 +11,15 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onSave }) => {
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
+  const [userName, setUserName] = useState(settings.userName || '');
+
+  // Synchronize local state with props whenever the modal is opened
+  useEffect(() => {
+    if (isOpen) {
+      setGeminiKey(settings.geminiApiKey || '');
+      setUserName(settings.userName || '');
+    }
+  }, [isOpen, settings.geminiApiKey, settings.userName]);
 
   if (!isOpen) return null;
 
@@ -27,7 +36,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
           </button>
         </div>
         
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
           {/* Gemini API Key Section */}
           <section className="space-y-4">
             <div className="space-y-3">
@@ -58,9 +67,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
               <div className="flex items-start gap-2">
                 <span className="text-sm mt-0.5" role="img" aria-label="Privacy">🔒</span>
                 <p className="text-sm text-slate-300 leading-relaxed">
-                  <span className="font-bold">Privacy Note:</span> Your key is stored in your browser's Session Storage. It persists through page reloads but is automatically wiped when you close this tab. It is used exclusively to communicate directly with Google's API and is never sent to our servers.
+                  <span className="font-bold">Privacy Note:</span> Your key is stored in your browser's Session Storage. It persists through page reloads but is automatically wiped when you close this tab.
                 </p>
               </div>
+            </div>
+          </section>
+
+          {/* User Name Section */}
+          <section className="space-y-4">
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-indigo-400 tracking-wider">User Name</label>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                This name is required if you wish to save your patterns to GitHub Gist.
+              </p>
+              <input 
+                type="text" 
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                placeholder="Enter your name (e.g. Jane Doe)"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder:text-slate-700 shadow-inner"
+              />
             </div>
           </section>
         </div>
@@ -74,7 +100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
           </button>
           <button 
             onClick={() => {
-              onSave({ ...settings, geminiApiKey: geminiKey });
+              onSave({ ...settings, geminiApiKey: geminiKey, userName });
               onClose();
             }}
             className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-indigo-500/20"

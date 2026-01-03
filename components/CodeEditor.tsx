@@ -167,13 +167,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               onClick={() => setView('editor')}
               className={`px-3 py-1 text-[10px] font-bold rounded transition-colors ${view === 'editor' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
             >
-              EDITOR
+              Code Editor
             </button>
             <button
               onClick={() => setView('diagram')}
               className={`px-3 py-1 text-[10px] font-bold rounded transition-colors ${view === 'diagram' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
             >
-              DIAGRAM
+              Diagram
             </button>
           </div>
 
@@ -186,8 +186,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                       onChange={(e) => setDiagramType(e.target.value as 'DAG' | 'SEQUENCE')}
                       className="appearance-none bg-slate-900/50 border border-slate-700 hover:border-slate-600 text-slate-300 text-[10px] font-bold rounded px-2 py-1 outline-none focus:border-indigo-500 cursor-pointer pr-6"
                     >
-                      <option value="DAG">DAG VIEW</option>
-                      <option value="SEQUENCE">SEQUENCE</option>
+                      <option value="DAG">DAG View</option>
+                      <option value="SEQUENCE">Sequence View</option>
                     </select>
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1 text-slate-400">
                       <svg className="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">

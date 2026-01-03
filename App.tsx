@@ -1,13 +1,15 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Octokit } from 'octokit';
 import { CodeEditor } from './components/CodeEditor';
 import { OutputPanel } from './components/OutputPanel';
 import { UserInputPanel } from './components/UserInputPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { InfoModal } from './components/InfoModal';
 import { ConfirmModal } from './components/ConfirmModal';
+import { DownloadModal } from './components/DownloadModal';
+import { UploadModal } from './components/UploadModal';
 import { executeCode } from './services/geminiService';
+import { createProxyClient } from './services/proxyService';
 import { ConsoleLog, ExecutionStatus, StorageSettings, Span, UserInputRequest } from './types';
 import { EXAMPLES } from './constants';
 
@@ -17,12 +19,15 @@ const SESSION_STORAGE_API_KEY = 'agent_playground_api_key_session';
 const LOCAL_STORAGE_STORAGE_KEY = 'agent_playground_storage';
 const LOCAL_STORAGE_WIDTH_KEY = 'agent_playground_layout_width';
 
-// Hardcoded PAT as requested by user
-const GITHUB_PAT = "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";
+const PROXY_URL = "https://github-proxy-268629993676.us-central1.run.app/proxy";
+const PROXY_KEY = "dbdm";
+const TARGET_GIST_ID = "1e994191a96bb502c53967c24c426940";
 
 const decodeCode = (str: string) => decodeURIComponent(atob(str));
 
 const App: React.FC = () => {
+  const octokit = useMemo(() => createProxyClient(PROXY_URL, PROXY_KEY), []);
+
   const [selectedExampleName, setSelectedExampleName] = useState<string>(() => {
     return localStorage.getItem(LOCAL_STORAGE_EXAMPLE_KEY) || EXAMPLES[0].name;
   });
@@ -49,31 +54,32 @@ const App: React.FC = () => {
     return overrides[initialExample] || EXAMPLES.find(ex => ex.name === initialExample)?.code || EXAMPLES[0].code;
   });
 
-  // Storage settings state - holds the API key in session memory
   const [storageSettings, setStorageSettings] = useState<StorageSettings>(() => {
     const savedLocal = localStorage.getItem(LOCAL_STORAGE_STORAGE_KEY);
     const savedSessionKey = sessionStorage.getItem(SESSION_STORAGE_API_KEY);
     
-    const localSettings = savedLocal ? JSON.parse(savedLocal) : { isPublicGist: true };
+    const localSettings = savedLocal ? JSON.parse(savedLocal) : { isPublicGist: true, userName: '' };
     return { 
       ...localSettings, 
       geminiApiKey: savedSessionKey || '' 
     };
   });
 
+  const logsRef = useRef<ConsoleLog[]>([]);
   const [logs, setLogs] = useState<ConsoleLog[]>([]);
   const [status, setStatus] = useState<ExecutionStatus>(ExecutionStatus.IDLE);
   const [logLevel, setLogLevel] = useState<'DEBUG' | 'INFO'>('DEBUG');
+  
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [isRevertModalOpen, setIsRevertModalOpen] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isSavingToCloud, setIsSavingToCloud] = useState(false);
   const [currentGistId, setCurrentGistId] = useState<string | null>(null);
   
-  // New state for API error handling
   const [apiError, setApiError] = useState<{ title: string; message: string } | null>(null);
 
-  // Layout State
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const saved = localStorage.getItem(LOCAL_STORAGE_WIDTH_KEY);
     return saved ? parseFloat(saved) : 50;
@@ -82,14 +88,12 @@ const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Runtime State
   const [runtimeSpans, setRuntimeSpans] = useState<Span[] | null>(null);
   const [userInputRequest, setUserInputRequest] = useState<UserInputRequest | null>(null);
   const [isInputPanelOpen, setIsInputPanelOpen] = useState(false);
   
   const executionIdRef = useRef<string | null>(null);
 
-  // Sync state to storage
   useEffect(() => {
     sessionStorage.setItem(SESSION_STORAGE_OVERRIDES_KEY, JSON.stringify(codeOverrides));
   }, [codeOverrides]);
@@ -98,16 +102,13 @@ const App: React.FC = () => {
     localStorage.setItem(LOCAL_STORAGE_EXAMPLE_KEY, selectedExampleName);
   }, [selectedExampleName]);
 
-  // Persist settings
   useEffect(() => {
-    // 1. Persist the API key to session storage (tab-specific, reload-persistent)
     if (storageSettings.geminiApiKey) {
       sessionStorage.setItem(SESSION_STORAGE_API_KEY, storageSettings.geminiApiKey);
     } else {
       sessionStorage.removeItem(SESSION_STORAGE_API_KEY);
     }
 
-    // 2. Persist other settings to local storage
     const { geminiApiKey, ...rest } = storageSettings;
     localStorage.setItem(LOCAL_STORAGE_STORAGE_KEY, JSON.stringify(rest));
   }, [storageSettings]);
@@ -116,7 +117,6 @@ const App: React.FC = () => {
     localStorage.setItem(LOCAL_STORAGE_WIDTH_KEY, leftWidth.toString());
   }, [leftWidth]);
 
-  // Resize Handlers
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
@@ -150,6 +150,17 @@ const App: React.FC = () => {
     };
   }, [isResizing, resize, stopResizing]);
 
+  const addSystemLog = (type: 'system' | 'error' | 'info' | 'verbose' | 'warn', content: string) => {
+    const newLog: ConsoleLog = {
+      id: crypto.randomUUID(),
+      type,
+      content,
+      timestamp: new Date().toLocaleTimeString()
+    };
+    logsRef.current.push(newLog);
+    setLogs([...logsRef.current]);
+  };
+
   const handleCodeChange = (newCode: string) => {
     setCode(newCode);
     setRuntimeSpans(null);
@@ -179,19 +190,57 @@ const App: React.FC = () => {
     return original ? original.code !== code : false;
   }, [code, selectedExampleName]);
 
-  const addSystemLog = (type: 'system' | 'error' | 'info', content: string) => {
-    setLogs((prev) => [...prev, {
-      id: crypto.randomUUID(),
-      type,
-      content,
-      timestamp: new Date().toLocaleTimeString()
-    }]);
+  const runRegressionSuite = async () => {
+    addSystemLog('system', '--- 🧪 STARTING REGRESSION TEST HARNESS ---');
+    addSystemLog('system', 'Initializing Test Environment...');
+    
+    try {
+      addSystemLog('system', 'CASE #1: Prompt Chaining Verification');
+      
+      const ch1Example = EXAMPLES.find(e => e.name.includes("Prompt Chaining"));
+      if (!ch1Example) throw new Error("Could not find Ch 1 Example");
+
+      addSystemLog('info', `Loading code for: ${ch1Example.name}`);
+      const testCode = ch1Example.code;
+      
+      await executeCode(
+        testCode,
+        (newLog) => {
+           logsRef.current.push(newLog);
+           setLogs([...logsRef.current]);
+        },
+        (graph) => {},
+        (req) => req.resolve("Regression Test"),
+        storageSettings.geminiApiKey
+      );
+
+      const finalInfoLogs = logsRef.current.filter(l => l.type === 'info');
+      const lastLog = finalInfoLogs[finalInfoLogs.length - 1]?.content || "";
+      
+      const hasCpu = lastLog.toLowerCase().includes('cpu');
+      const hasMemory = lastLog.toLowerCase().includes('memory');
+      const hasStorage = lastLog.toLowerCase().includes('storage');
+
+      if (hasCpu && hasMemory && hasStorage) {
+         addSystemLog('info', '✅ REGRESSION CASE #1 PASSED: Prompt Chaining output verified.');
+      } else {
+         addSystemLog('error', '❌ REGRESSION CASE #1 FAILED: Prompt Chaining output missing expected keys.');
+         setStatus(ExecutionStatus.ERROR);
+         return;
+      }
+
+      addSystemLog('system', '--- 🏁 ALL REGRESSION TESTS PASSED ---');
+      setStatus(ExecutionStatus.SUCCESS);
+
+    } catch (err: any) {
+      addSystemLog('error', `🔥 REGRESSION FATAL ERROR: ${err.message}`);
+      setStatus(ExecutionStatus.ERROR);
+    }
   };
 
   const handleRun = useCallback(async () => {
     if (status === ExecutionStatus.RUNNING) return;
 
-    // 1. Check for API Key presence first
     if (!storageSettings.geminiApiKey || storageSettings.geminiApiKey.trim() === '') {
       setApiError({
         title: "Gemini API Key Required",
@@ -200,10 +249,21 @@ const App: React.FC = () => {
       return;
     }
 
+    if (selectedExampleName === 'Empty Template' && code.trim() === 'regression') {
+      logsRef.current = [];
+      setLogs([]);
+      setStatus(ExecutionStatus.RUNNING);
+      runRegressionSuite();
+      return;
+    }
+
     const currentRunId = crypto.randomUUID();
     executionIdRef.current = currentRunId;
     setStatus(ExecutionStatus.RUNNING);
+    
+    logsRef.current = [];
     setLogs([]);
+    
     setRuntimeSpans(null); 
     setUserInputRequest(null); 
     setIsInputPanelOpen(false); 
@@ -215,7 +275,8 @@ const App: React.FC = () => {
         code, 
         (newLog) => {
           if (executionIdRef.current === currentRunId) {
-            setLogs((prev) => [...prev, newLog]);
+            logsRef.current.push(newLog);
+            setLogs([...logsRef.current]);
           }
         },
         (graphPayload) => {
@@ -247,7 +308,6 @@ const App: React.FC = () => {
         addSystemLog('error', `Runtime Error: ${errorMessage}`);
         setStatus(ExecutionStatus.ERROR);
 
-        // Detect API Key related errors
         const lowerMsg = errorMessage.toLowerCase();
         const isAuthError = lowerMsg.includes('401') || lowerMsg.includes('403') || lowerMsg.includes('api_key_invalid') || lowerMsg.includes('unauthorized');
         const isQuotaError = lowerMsg.includes('429') || lowerMsg.includes('quota') || lowerMsg.includes('limit');
@@ -270,7 +330,7 @@ const App: React.FC = () => {
          setUserInputRequest(null); 
       }
     }
-  }, [code, status, storageSettings.geminiApiKey]);
+  }, [code, status, storageSettings.geminiApiKey, selectedExampleName]);
 
   const handleStop = useCallback(() => {
     if (executionIdRef.current) {
@@ -322,6 +382,52 @@ const App: React.FC = () => {
     addSystemLog('system', `File downloaded as: ${filename}`);
   };
 
+  const handleSaveToGist = async (customFileName?: string) => {
+    if (isSavingToCloud) return;
+    
+    setIsSavingToCloud(true);
+    addSystemLog('system', `Updating GitHub Gist (${TARGET_GIST_ID}) via proxy...`);
+    
+    try {
+      const baseFilename = customFileName || getEffectiveFilename();
+      const userId = (storageSettings.userName || 'anon').trim().toLowerCase().replace(/\s+/g, '-');
+      const gistFileName = `${userId}_${baseFilename}`;
+
+      const description = storageSettings.userName 
+        ? `Agent Design Playground - ${selectedExampleName} (by ${storageSettings.userName})`
+        : `Agent Design Playground - ${selectedExampleName}`;
+
+      const params = {
+        description,
+        files: {
+          [gistFileName]: {
+            content: code
+          }
+        }
+      };
+
+      const result = await octokit.request(`PATCH /gists/${TARGET_GIST_ID}`, params);
+
+      const gistUrl = result.html_url;
+      const gistId = result.id;
+      
+      setCurrentGistId(gistId);
+      setIsDownloadModalOpen(false); 
+      
+      try {
+        await navigator.clipboard.writeText(gistUrl);
+        addSystemLog('info', `Cloud Update Success! File "${gistFileName}" updated. URL copied to clipboard: ${gistUrl}`);
+      } catch (clipError) {
+        addSystemLog('info', `Cloud Update Success! File "${gistFileName}" updated. URL: ${gistUrl}`);
+      }
+      
+    } catch (error: any) {
+      addSystemLog('error', error.message || "Failed to update cloud gist.");
+    } finally {
+      setIsSavingToCloud(false);
+    }
+  };
+
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
@@ -334,7 +440,6 @@ const App: React.FC = () => {
         const content = event.target?.result as string;
         handleCodeChange(content);
         addSystemLog('system', `Code imported from locally uploaded file: ${file.name}`);
-        // Reset input value so same file can be uploaded again if needed
         e.target.value = '';
       };
       reader.onerror = () => {
@@ -344,6 +449,11 @@ const App: React.FC = () => {
     }
   };
 
+  const handleLoadGistContent = (content: string, filename: string) => {
+    handleCodeChange(content);
+    addSystemLog('system', `Code imported from cloud gist file: ${filename}`);
+  };
+
   const loadExample = (exampleName: string) => {
     const example = EXAMPLES.find(ex => ex.name === exampleName);
     if (example) {
@@ -351,10 +461,13 @@ const App: React.FC = () => {
       setSelectedExampleName(example.name);
       const targetCode = codeOverrides[example.name] || example.code;
       setCode(targetCode);
+      
+      logsRef.current = [];
       setLogs([]);
+      
       setStatus(ExecutionStatus.IDLE);
       setCurrentGistId(null); 
-      setRuntimeSpans(null); // Clear runtime visualization data on pattern switch
+      setRuntimeSpans(null);
     }
   };
 
@@ -374,6 +487,7 @@ const App: React.FC = () => {
         return next;
       });
 
+      logsRef.current = [];
       setLogs([]);
       setStatus(ExecutionStatus.IDLE);
       setCurrentGistId(null);
@@ -391,7 +505,7 @@ const App: React.FC = () => {
           <button onClick={() => setIsInfoModalOpen(true)} className="focus:outline-none hover:opacity-80 transition-opacity">
             <div className="w-8 h-8 rounded bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-white">
-                <path fillRule="evenodd" d="M3 6a3 3 0 013-3h12a3 3 0 013 3v12a3 3 0 01-3 3H6a3 3 0 01-3-3V6zm14.25 6a.75.75 0 01-.22.53l-2.25 2.25a.75.75 0 11-1.06-1.06L15.44 12l-1.72-1.72a.75.75 0 111.06-1.06l2.25 2.25c.141.14.22.331.22.53zm-10.28 0a.75.75 0 01.22-.53l2.25-2.25a.75.75 0 111.06 1.06L8.56 12l1.72 1.72a.75.75 0 11-1.06 1.06l-2.25-2.25a.75.75 0 01-.22-.53z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M3 6a3 3 0 013-3h12a3 3 0 013 3v12a3 3 0 01-3 3H6a3 3 0 01-3-3V6zm14.25 6a.75.75 0 01-.22.53l-2.25 2.25a.75.75 11-1.06-1.06L15.44 12l-1.72-1.72a.75.75 111.06-1.06l2.25 2.25c.141.14.22.331.22.53zm-10.28 0a.75.75 0 01.22-.53l2.25-2.25a.75.75 111.06 1.06L8.56 12l1.72 1.72a.75.75 11-1.06 1.06l-2.25-2.25a.75.75 0 01-.22-.53z" clipRule="evenodd" />
               </svg>
             </div>
           </button>
@@ -400,25 +514,17 @@ const App: React.FC = () => {
             <h1 className="font-bold text-lg tracking-tight text-white leading-none cursor-pointer" onClick={() => setIsInfoModalOpen(true)}>
               Agent Design Playground
             </h1>
-            
-            <button
-              onClick={() => setIsInfoModalOpen(true)}
-              title="About the Book"
-              className="flex items-center justify-center p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-all active:scale-95"
-            >
-               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-            </button>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3 mr-4">
-             <span className="text-xs text-slate-500 uppercase font-semibold tracking-wider">Pattern:</span>
+             <span className="text-xs text-white font-semibold tracking-wider">Pattern:</span>
              <div className="relative group">
                 <select 
                   value={selectedExampleName}
                   onChange={(e) => loadExample(e.target.value)}
-                  className="appearance-none bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs rounded-md pl-3 pr-8 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500 cursor-pointer transition-colors w-44 truncate"
+                  className="appearance-none bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs rounded-md pl-3 pr-8 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500 cursor-pointer transition-colors w-64 truncate"
                 >
                   {EXAMPLES.map((ex) => (
                     <option key={ex.name} value={ex.name}>{ex.name}</option>
@@ -434,31 +540,30 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleDownload}
-              title="Download as .js file"
+              onClick={() => setIsDownloadModalOpen(true)}
+              title="Save or share pattern"
               className="flex items-center justify-center p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-all active:scale-95"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             </button>
 
             {selectedExampleName === 'Empty Template' && (
-              <>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept=".js,.ts,.txt,.mjs"
-                  className="hidden"
-                />
-                <button
-                  onClick={handleUploadClick}
-                  title="Upload from local machine"
-                  className="flex items-center justify-center p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-all active:scale-95"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-                </button>
-              </>
+              <button
+                onClick={() => setIsUploadModalOpen(true)}
+                title="Load pattern"
+                className="flex items-center justify-center p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-all active:scale-95"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+              </button>
             )}
+            
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".js,.ts,.txt,.mjs"
+              className="hidden"
+            />
 
             <div className="w-[1px] h-6 bg-slate-800 mx-1"></div>
 
@@ -519,7 +624,7 @@ const App: React.FC = () => {
           style={{ width: `${leftWidth}%` }}
         >
           <CodeEditor 
-            key={selectedExampleName} // Forcing remount on pattern switch to reset internal toggle state
+            key={selectedExampleName} 
             code={code} 
             onChange={(c) => handleCodeChange(c)} 
             disabled={status === ExecutionStatus.RUNNING}
@@ -549,7 +654,10 @@ const App: React.FC = () => {
             <OutputPanel 
               logs={logs} 
               status={status}
-              onClear={() => setLogs([])}
+              onClear={() => {
+                logsRef.current = [];
+                setLogs([]);
+              }}
               logLevel={logLevel}
               setLogLevel={setLogLevel}
             />
@@ -600,16 +708,35 @@ const App: React.FC = () => {
         type="warning"
       />
 
-      {/* API Error Dialog */}
+      <DownloadModal
+        isOpen={isDownloadModalOpen}
+        onClose={() => setIsDownloadModalOpen(false)}
+        onSaveLocally={handleDownload}
+        onSaveToGist={handleSaveToGist}
+        isSavingToGist={isSavingToCloud}
+        settings={storageSettings}
+        onUpdateSettings={setStorageSettings}
+        defaultFileName={getEffectiveFilename()}
+      />
+
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onTriggerLocalUpload={handleUploadClick}
+        onLoadGistContent={handleLoadGistContent}
+        octokit={octokit}
+        gistId={TARGET_GIST_ID}
+      />
+
       <ConfirmModal
         isOpen={!!apiError}
         onClose={() => {
           setApiError(null);
-          setIsSettingsOpen(true); // Automatically show settings after closing error
+          setIsSettingsOpen(true);
         }}
         onConfirm={() => {
           setApiError(null);
-          setIsSettingsOpen(true); // Automatically show settings after confirming error
+          setIsSettingsOpen(true);
         }}
         title={apiError?.title || "Error"}
         message={apiError?.message || ""}

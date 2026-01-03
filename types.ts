@@ -21,6 +21,7 @@ export interface CodeSnippet {
 export interface StorageSettings {
   geminiApiKey: string;
   isPublicGist: boolean;
+  userName?: string;
 }
 
 export interface Span {
